@@ -18,11 +18,11 @@ locals {
 }
 
 ################################################################################
-# Supporting Resources
+# VPC
 ################################################################################
 
 module "vpc" {
-  source  = "terraform-aws-modules/vpc/aws"
+  source  = "git::https://github.com/terraform-aws-modules/terraform-aws-vpc.git?ref=v3.2.0"
   version = "~> 3.0"
 
   name = local.name
@@ -46,8 +46,12 @@ data "aws_ami" "amazon_linux" {
   }
 }
 
+################################################################################
+# Security Groups
+################################################################################
+
 module "security_group" {
-  source  = "terraform-aws-modules/security-group/aws"
+  source  = "git::https://github.com/terraform-aws-modules/terraform-aws-security-group.git?ref=v3.2.0"
   version = "~> 4.0"
 
   name        = local.name
@@ -76,138 +80,6 @@ resource "aws_network_interface" "this" {
 ################################################################################
 # EC2 Module
 ################################################################################
-
-module "ec2_disabled" {
-  source = "../../"
-
-  create = false
-}
-
-module "ec2_complete" {
-  source = "../../"
-
-  name = local.name
-
-  ami                         = data.aws_ami.amazon_linux.id
-  instance_type               = "c5.4xlarge"
-  availability_zone           = element(module.vpc.azs, 0)
-  subnet_id                   = element(module.vpc.private_subnets, 0)
-  vpc_security_group_ids      = [module.security_group.security_group_id]
-  placement_group             = aws_placement_group.web.id
-  associate_public_ip_address = true
-
-  # only one of these can be enabled at a time
-  hibernation = true
-  # enclave_options_enabled = true
-
-  user_data_base64 = base64encode(local.user_data)
-
-  cpu_core_count       = 2 # default 4
-  cpu_threads_per_core = 1 # default 2
-
-  capacity_reservation_specification = {
-    capacity_reservation_preference = "open"
-  }
-
-  enable_volume_tags = false
-  root_block_device = [
-    {
-      encrypted   = true
-      volume_type = "gp3"
-      throughput  = 200
-      volume_size = 50
-      tags = {
-        Name = "my-root-block"
-      }
-    },
-  ]
-
-  ebs_block_device = [
-    {
-      device_name = "/dev/sdf"
-      volume_type = "gp3"
-      volume_size = 5
-      throughput  = 200
-      encrypted   = true
-      kms_key_id  = aws_kms_key.this.arn
-    }
-  ]
-
-  tags = local.tags
-}
-
-module "ec2_network_interface" {
-  source = "../../"
-
-  name = "${local.name}-network-interface"
-
-  ami           = data.aws_ami.amazon_linux.id
-  instance_type = "c5.large"
-
-  network_interface = [
-    {
-      device_index          = 0
-      network_interface_id  = aws_network_interface.this.id
-      delete_on_termination = false
-    }
-  ]
-
-  tags = local.tags
-}
-
-module "ec2_metadata_options" {
-  source = "../../"
-
-  name = "${local.name}-metadata-options"
-
-  ami                    = data.aws_ami.amazon_linux.id
-  instance_type          = "c5.4xlarge"
-  subnet_id              = element(module.vpc.private_subnets, 0)
-  vpc_security_group_ids = [module.security_group.security_group_id]
-
-  metadata_options = {
-    http_endpoint               = "enabled"
-    http_tokens                 = "required"
-    http_put_response_hop_limit = 8
-  }
-
-  tags = local.tags
-}
-
-module "ec2_t2_unlimited" {
-  source = "../../"
-
-  name = "${local.name}-t2-unlimited"
-
-  ami                         = data.aws_ami.amazon_linux.id
-  instance_type               = "t2.micro"
-  cpu_credits                 = "unlimited"
-  subnet_id                   = element(module.vpc.private_subnets, 0)
-  vpc_security_group_ids      = [module.security_group.security_group_id]
-  associate_public_ip_address = true
-
-  tags = local.tags
-}
-
-module "ec2_t3_unlimited" {
-  source = "../../"
-
-  name = "${local.name}-t3-unlimited"
-
-  ami                         = data.aws_ami.amazon_linux.id
-  instance_type               = "t3.micro"
-  cpu_credits                 = "unlimited"
-  subnet_id                   = element(module.vpc.private_subnets, 0)
-  vpc_security_group_ids      = [module.security_group.security_group_id]
-  associate_public_ip_address = true
-
-  tags = local.tags
-}
-
-################################################################################
-# EC2 Module - multiple instances with `for_each`
-################################################################################
-
 locals {
   multiple_instances = {
     one = {
@@ -246,11 +118,9 @@ locals {
   }
 }
 
-module "ec2_multiple" {
-  source = "../../"
-
+module "ec2_complete" {
+  source = "git::https://github.com/terraform-aws-modules/terraform-aws-ec2-instance.git?ref=v3.2.0"
   for_each = local.multiple_instances
-
   name = "${local.name}-multi-${each.key}"
 
   ami                    = data.aws_ami.amazon_linux.id
@@ -262,33 +132,12 @@ module "ec2_multiple" {
   enable_volume_tags = false
   root_block_device  = lookup(each.value, "root_block_device", [])
 
-  tags = local.tags
-}
-
-################################################################################
-# EC2 Module - spot instance request
-################################################################################
-
-module "ec2_spot_instance" {
-  source = "../../"
-
-  name                 = "${local.name}-spot-instance"
-  create_spot_instance = true
-
-  ami                         = data.aws_ami.amazon_linux.id
-  instance_type               = "c4.4xlarge"
-  availability_zone           = element(module.vpc.azs, 0)
-  subnet_id                   = element(module.vpc.private_subnets, 0)
-  vpc_security_group_ids      = [module.security_group.security_group_id]
   placement_group             = aws_placement_group.web.id
   associate_public_ip_address = true
 
-  # Spot request specific attributes
-  spot_price                          = "0.60"
-  spot_wait_for_fulfillment           = true
-  spot_type                           = "persistent"
-  spot_instance_interruption_behavior = "terminate"
-  # End spot request specific attributes
+  # only one of these can be enabled at a time
+  hibernation = true
+  # enclave_options_enabled = true
 
   user_data_base64 = base64encode(local.user_data)
 
@@ -300,28 +149,6 @@ module "ec2_spot_instance" {
   }
 
   enable_volume_tags = false
-  root_block_device = [
-    {
-      encrypted   = true
-      volume_type = "gp3"
-      throughput  = 200
-      volume_size = 50
-      tags = {
-        Name = "my-root-block"
-      }
-    },
-  ]
-
-  ebs_block_device = [
-    {
-      device_name = "/dev/sdf"
-      volume_type = "gp3"
-      volume_size = 5
-      throughput  = 200
-      encrypted   = true
-      # kms_key_id  = aws_kms_key.this.arn # you must grant the AWSServiceRoleForEC2Spot service-linked role access to any custom KMS keys
-    }
-  ]
 
   tags = local.tags
 }
